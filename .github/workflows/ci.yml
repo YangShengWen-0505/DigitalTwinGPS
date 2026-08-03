@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check digital_twin tests run_server.py run_worker.py
+      - run: python -m compileall -q run_server.py run_worker.py digital_twin
+        env:
+          API_SECRET_KEY: test-dashboard-secret
+          API_ACCESS_KEY: test-api-access-secret
+          FLASK_SESSION_SECRET: test-session-secret
+      - run: python -m pytest
+        env:
+          API_SECRET_KEY: test-dashboard-secret
+          API_ACCESS_KEY: test-api-access-secret
+          FLASK_SESSION_SECRET: test-session-secret
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f .devcontainer/Dockerfile -t digitaltwingps-ci .
