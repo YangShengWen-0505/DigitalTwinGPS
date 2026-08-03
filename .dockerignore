@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+!.env.example
+AI.md
+logs
+data
+__pycache__
+*.py[cod]
+.venv
+.pytest_cache
+graphify-out

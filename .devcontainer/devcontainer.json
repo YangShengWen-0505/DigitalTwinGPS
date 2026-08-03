@@ -1,9 +1,10 @@
 {
     "name": "DigitalTwinGPS",
     "dockerComposeFile": [
-        "docker-compose.yml"
+        "docker-compose.yml",
+        "docker-compose.dev.yml"
     ],
-    "service": "run-server",
+    "service": "web",
     "workspaceFolder": "/workspace",
     "overrideCommand": true,
     "shutdownAction": "stopCompose",
@@ -15,5 +16,5 @@
             ]
         }
     },
-    "remoteUser": "root"
+    "remoteUser": "appuser"
 }

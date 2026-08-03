@@ -1,15 +1,36 @@
-version: "3.8"
 name: digitaltwingps
 
+x-app: &app
+  build:
+    context: ..
+    dockerfile: .devcontainer/Dockerfile
+  env_file:
+    - ../.env
+  environment:
+    BIND_HOST: 0.0.0.0
+    FLASK_PORT: 5050
+  volumes:
+    - app-data:/workspace/data
+    - app-logs:/workspace/logs
+  restart: unless-stopped
+
 services:
-  run-server:
-    build:
-      context: ..
-      dockerfile: .devcontainer/Dockerfile
-    command: sleep infinity
+  web:
+    <<: *app
+    command: python run_server.py
     ports:
-      - "${FLASK_PORT:-5050}:${FLASK_PORT:-5050}"
-    env_file:
-      - ../.env
-    volumes:
-      - ..:/workspace:cached
+      - "127.0.0.1:${HOST_PORT:-5050}:5050"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5050/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  worker:
+    <<: *app
+    command: python run_worker.py
+
+volumes:
+  app-data:
+  app-logs:

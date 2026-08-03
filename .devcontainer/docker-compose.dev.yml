@@ -1,0 +1,12 @@
+services:
+  web:
+    volumes:
+      - ..:/workspace
+    restart: "no"
+
+  worker:
+    profiles:
+      - mission-worker
+    volumes:
+      - ..:/workspace
+    restart: "no"
