@@ -1,8 +1,4 @@
 {
-  "settings": {
-    "SPEED_MULTIPLIER": 1,
-    "GUARD_INTERVAL": 1.5
-  },
   "mrt_station_groups": {
     "taipei_metro": {
       "BR Wenhu Line": {

@@ -1,11 +1,15 @@
-import os
 import json
+import os
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import googlemaps
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(BASE_DIR, '.env'), override=True)
+# Explicit process/container environment wins over the developer's local .env.
+load_dotenv(os.path.join(BASE_DIR, '.env'), override=False)
 
 if hasattr(time, 'tzset') and 'TZ' in os.environ:
     time.tzset()
@@ -13,54 +17,41 @@ if hasattr(time, 'tzset') and 'TZ' in os.environ:
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "").strip().strip('"')
 PHONE_TAILSCALE_IP = os.getenv("PHONE_TAILSCALE_IP", "").strip().strip('"')
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "").strip().strip('"')
-if not API_SECRET_KEY:
-    raise RuntimeError("[FATAL] API_SECRET_KEY is not set in .env. Server cannot start safely.")
-if len(API_SECRET_KEY) < 16:
-    print("[WARNING] API_SECRET_KEY is too short (< 16 chars). Use a long random secret.")
-
-if not GOOGLE_MAPS_API_KEY:
-    print("[SYSTEM] Error: Missing GOOGLE_MAPS_API_KEY in .env file.")
-
+API_ACCESS_KEY = os.getenv("API_ACCESS_KEY", API_SECRET_KEY).strip().strip('"')
+FLASK_SESSION_SECRET = os.getenv("FLASK_SESSION_SECRET", API_SECRET_KEY).strip().strip('"')
 gmaps_client = None
 if GOOGLE_MAPS_API_KEY:
     try:
-        gmaps_client = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
-    except Exception as e:
-        print(f"[SYSTEM] Warning: Google Maps API initialization failed: {e}")
+        gmaps_client = googlemaps.Client(
+            key=GOOGLE_MAPS_API_KEY,
+            connect_timeout=5,
+            read_timeout=20,
+            retry_timeout=30,
+        )
+    except Exception:
+        gmaps_client = None
 
 config_path = os.path.join(BASE_DIR, "digital_twin", "data", "settings.json")
 try:
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         CONFIG = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError) as e:
-    print(f"[SYSTEM] Error: failed to load {config_path}: {e}")
-    CONFIG = {"settings": {"SPEED_MULTIPLIER": 1, "GUARD_INTERVAL": 1.5}, "mrt_station_groups": {}}
-
-def _env_float(name: str, fallback: float) -> float:
-    value = os.getenv(name, "").strip().strip('"')
-    if not value:
-        return fallback
-    try:
-        return float(value)
-    except ValueError:
-        print(f"[SYSTEM] Warning: {name} must be a number. Falling back to {fallback}.")
-        return fallback
+except (FileNotFoundError, json.JSONDecodeError):
+    CONFIG = {"mrt_station_groups": {}}
 
 
-SPEED_MULTIPLIER = _env_float(
-    "SPEED_MULTIPLIER",
-    float(CONFIG.get("settings", {}).get("SPEED_MULTIPLIER", 1)),
-)
-GUARD_INTERVAL = _env_float(
-    "GUARD_INTERVAL",
-    float(CONFIG.get("settings", {}).get("GUARD_INTERVAL", 1.5)),
-)
-if SPEED_MULTIPLIER <= 0:
-    print("[SYSTEM] Warning: SPEED_MULTIPLIER must be > 0. Falling back to 1.")
-    SPEED_MULTIPLIER = 1
-if GUARD_INTERVAL < 0.5:
-    print("[SYSTEM] Warning: GUARD_INTERVAL is too low. Falling back to 1.5.")
-    GUARD_INTERVAL = 1.5
+def validate_runtime_config() -> None:
+    secrets = {
+        "API_SECRET_KEY": API_SECRET_KEY,
+        "API_ACCESS_KEY": API_ACCESS_KEY,
+        "FLASK_SESSION_SECRET": FLASK_SESSION_SECRET,
+    }
+    missing = [name for name, value in secrets.items() if not value]
+    if missing:
+        raise RuntimeError(f"Missing required secret(s): {', '.join(missing)}")
+    if any(len(value) < 16 for value in secrets.values()):
+        raise RuntimeError("API and session secrets must each be at least 16 characters")
+    if len(set(secrets.values())) != len(secrets):
+        raise RuntimeError("API_SECRET_KEY, API_ACCESS_KEY, and FLASK_SESSION_SECRET must be distinct")
 
 def _flatten_station_groups(groups: dict) -> dict[str, list[float]]:
     stations: dict[str, list[float]] = {}
@@ -82,3 +73,9 @@ def _flatten_station_groups(groups: dict) -> dict[str, list[float]]:
 
 MRT_STATIONS_DB = {}
 MRT_STATIONS_DB.update(_flatten_station_groups(CONFIG.get("mrt_station_groups", {})))
+
+TIMEZONE = ZoneInfo(os.getenv("TZ", "Asia/Taipei"))
+
+
+def local_now() -> datetime:
+    return datetime.now(TIMEZONE)
