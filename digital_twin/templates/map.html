@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DigitalTwinGPS Dashboard</title>
+    <title>{{ 'DigitalTwinGPS History · ' ~ page_context.id if page_context.mode == 'history' else 'DigitalTwinGPS Dashboard' }}</title>
     <meta name="description" content="Operational dashboard for route simulation, movement logs, and GPS playback.">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/css/all.min.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/map.css') }}">
 </head>
 <body>
@@ -18,8 +18,9 @@
                 <div class="brand-icon"><i class="fa-solid fa-satellite-dish"></i></div>
                 <div>
                     <div class="brand-title">DigitalTwinGPS</div>
-                    <div class="brand-subtitle">Route telemetry console</div>
+                    <div class="brand-subtitle">{{ 'History · ' ~ page_context.id if page_context.mode == 'history' else 'Route telemetry console' }}</div>
                 </div>
+                {% if page_context.mode == 'history' %}<span class="history-context-badge">HISTORY</span>{% endif %}
             </div>
 
             <button class="command-menu-btn" id="commandMenuBtn" type="button" title="Toggle actions">
@@ -33,7 +34,7 @@
                 <button class="nav-btn" data-open-log="security"><i class="fa-solid fa-lock"></i><span>Security</span></button>
                 <button class="nav-btn" data-open-csv><i class="fa-solid fa-file-csv"></i><span>CSV</span></button>
                 <button class="nav-btn" id="navigationHistoryBtn"><i class="fa-solid fa-signs-post"></i><span>Navigation</span></button>
-                <button class="nav-btn primary" id="scheduleBtn"><i class="fa-solid fa-clipboard-list"></i><span>Schedule</span></button>
+                <button class="nav-btn primary" id="scheduleBtn"><i class="fa-solid fa-clipboard-list"></i><span>{{ 'LIVE Schedule' if page_context.mode == 'history' else 'Schedule' }}</span></button>
                 <button class="nav-btn primary" id="historyBtn"><i class="fa-solid fa-clock-rotate-left"></i><span>History</span></button>
                 <form class="logout-form" action="/logout" method="post">
                     <button class="nav-btn" type="submit"><i class="fa-solid fa-right-from-bracket"></i><span>Logout</span></button>
@@ -52,7 +53,7 @@
                         <div class="eyebrow" id="status-title-text">Current status</div>
                         <div id="action" class="action-text">Waiting...</div>
                     </div>
-                    <div class="live-dot" id="indicator"></div>
+                    <div class="live-dot"></div>
                 </div>
 
                 <div class="coords">
@@ -99,11 +100,12 @@
                 <div class="url-box" id="tunnel-url">Tailscale standby</div>
 
                 <div class="meta-grid">
-                    <div class="meta-box"><div class="meta-label">Speed</div><div class="meta-value" id="speed-multiplier">--</div></div>
-                    <div class="meta-box"><div class="meta-label">Guardian</div><div class="meta-value" id="guard-interval">--</div></div>
+                    <div class="meta-box"><div class="meta-label">Initial ETA</div><div class="meta-value" id="initial-eta">--</div></div>
+                    <div class="meta-box"><div class="meta-label">Latest ETA</div><div class="meta-value" id="latest-eta">--</div></div>
                     <div class="meta-box"><div class="meta-label">Route Points</div><div class="meta-value" id="route-points">0</div></div>
-                    <div class="meta-box"><div class="meta-label">Generation</div><div class="meta-value" id="mission-generation">0</div></div>
+                    <div class="meta-box"><div class="meta-label">Schedule Debt</div><div class="meta-value" id="schedule-debt">0s</div></div>
                 </div>
+                <div class="url-box" id="mission-error" hidden></div>
                 <div class="url-box muted" id="log-session">No active log session</div>
             </section>
         </main>
@@ -127,9 +129,8 @@
                 <section class="panel-block">
                     <div class="section-title"><i class="fa-solid fa-layer-group"></i> Basemap</div>
                     <select id="mapLayerSelect">
-                        <option value="googleStreets" selected>Google streets</option>
+                        <option value="cartoDark" selected>CartoDB Dark</option>
                         <option value="osmDark">OSM Standard</option>
-                        <option value="cartoDark">CartoDB Dark</option>
                     </select>
                 </section>
 
@@ -194,10 +195,21 @@
         </div>
     </div>
 
+    <div id="data-modal" class="modal">
+        <div class="modal-content wide">
+            <div class="modal-header">
+                <h2 id="data-modal-title">Data</h2>
+                <button class="close-btn" data-close-modal="data-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" id="data-body"></div>
+        </div>
+    </div>
+
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+    <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/leaflet-polylinedecorator/leaflet.polylineDecorator.js') }}"></script>
+    <script id="page-context" type="application/json">{{ page_context|tojson }}</script>
     <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

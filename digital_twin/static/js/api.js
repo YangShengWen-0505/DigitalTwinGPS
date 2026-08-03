@@ -18,19 +18,3 @@ export async function fetchJson(url, fallbackMessage) {
     }
     return response.json();
 }
-
-export async function fetchText(url, fallbackMessage) {
-    const response = await apiFetch(url);
-    if (!response.ok) {
-        throw new Error(fallbackMessage || `Request failed with HTTP ${response.status}.`);
-    }
-    return response.text();
-}
-
-export function currentCsvUrl() {
-    return "/api/csv";
-}
-
-export function historyCsvUrl(session, startLine = 0) {
-    return `/api/history/${encodeURIComponent(session.date)}/${encodeURIComponent(session.session)}/csv?start_line=${startLine}`;
-}

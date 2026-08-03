@@ -1,6 +1,6 @@
-import { fetchJson } from "./api.js";
+import { apiFetch, fetchJson } from "./api.js";
+import { contextLabel, dataUrls, isHistoryPage } from "./context.js";
 import { $, escapeHtml, formatDuration, openModal, renderEmpty, renderError, showToast } from "./ui.js";
-import { loadHistorySession } from "./playback.js";
 import { updatePlannedRoute } from "./mapView.js";
 
 export async function openMissionModal() {
@@ -48,7 +48,7 @@ export async function openHistoryModal() {
         }
 
         container.innerHTML = sessions.map((session) => `
-            <div class="history-row" data-date="${escapeHtml(session.date)}" data-session="${escapeHtml(session.session)}">
+            <a class="history-row" href="/history/${encodeURIComponent(session.date)}/${encodeURIComponent(session.session)}" target="_blank" rel="noopener">
                 <div class="history-main">
                     <span class="stop-badge"><i class="fa-solid fa-route"></i></span>
                     <span class="history-title">${escapeHtml(session.id)}</span>
@@ -58,31 +58,16 @@ export async function openHistoryModal() {
                     <div>Stops: ${session.stops ?? 0} | Size: ${Math.round((session.csv_size || 0) / 1024)} KB</div>
                     <div>Start: ${escapeHtml(session.start || "Unknown")}</div>
                 </div>
-            </div>
+            </a>
         `).join("");
-
-        container.querySelectorAll(".history-row").forEach((row) => {
-            row.addEventListener("click", async () => {
-                container.querySelectorAll(".history-row").forEach((item) => item.classList.remove("active"));
-                row.classList.add("active");
-                try {
-                    await loadHistorySession({
-                        date: row.dataset.date,
-                        session: row.dataset.session,
-                        id: `${row.dataset.date}/${row.dataset.session}`,
-                    });
-                    showToast("Historical mission loaded.");
-                } catch (error) {
-                    showToast(error.message || "Unable to load historical mission data.", "error");
-                }
-            });
-        });
     } catch (error) {
         renderError(container, error.message || "Unable to load mission history.");
     }
 }
 
 function segmentLabel(segment) {
+    if (segment.vehicle_type === "SUBWAY") return "MRT";
+    if (segment.vehicle_type === "BUS") return "Bus";
     const type = String(segment.type || segment.travel_mode || "move").toLowerCase();
     if (type === "walk") return "Walking";
     if (type === "mrt") return "MRT";
@@ -93,7 +78,7 @@ function segmentLabel(segment) {
 
 function renderTransitMeta(segment) {
     const parts = [];
-    const line = segment.line_short_name || segment.line_name;
+    const line = segment.line || segment.line_short_name || segment.line_name;
     if (line) parts.push(`Route: ${escapeHtml(line)}`);
     if (segment.vehicle_name || segment.vehicle_type) {
         parts.push(`Vehicle: ${escapeHtml(segment.vehicle_name || segment.vehicle_type)}`);
@@ -114,21 +99,21 @@ export async function openNavigationHistoryModal() {
     container.innerHTML = '<div class="empty-state">Loading navigation history...</div>';
 
     try {
-        const routes = await fetchJson("/api/navigation_history", "Unable to load navigation history.");
+        const routes = await fetchJson(dataUrls.navigation, "Unable to load navigation history.");
         if (!routes.length) {
-            renderEmpty(container, "No navigation history is available for the current mission.");
+            renderEmpty(container, `No navigation history is available for ${contextLabel()}.`);
             return;
         }
 
         container.innerHTML = routes.map((route, routeIndex) => {
-            const segments = Array.isArray(route.segments) ? route.segments : [];
+            const segments = Array.isArray(route.steps) ? route.steps : [];
             const segmentRows = segments.map((segment) => `
                 <div class="navigation-step ${escapeHtml(segment.type || "")}">
                     <div class="navigation-step-head">
                         <span class="stop-badge">${Number(segment.index || 0) || ""}</span>
                         <div>
-                            <div class="navigation-step-title">${escapeHtml(segmentLabel(segment))}${segment.line_short_name ? ` ${escapeHtml(segment.line_short_name)}` : ""}</div>
-                            <div class="navigation-step-sub">${escapeHtml(segment.distance_text || "-")} | ${escapeHtml(segment.duration_text || "-")}</div>
+                            <div class="navigation-step-title">${escapeHtml(segmentLabel(segment))}${segment.line ? ` ${escapeHtml(segment.line)}` : ""}</div>
+                            <div class="navigation-step-sub">${Number(segment.distance_meters || 0).toLocaleString()} m | ${formatDuration(segment.duration_seconds || 0)}</div>
                         </div>
                     </div>
                     <div class="navigation-step-body">
@@ -144,9 +129,9 @@ export async function openNavigationHistoryModal() {
                         <div>
                             <div class="history-title">Route ${routeIndex + 1}: ${escapeHtml(route.origin)} -> ${escapeHtml(route.destination)}</div>
                             <div class="history-meta compact">
-                                <div>Mode: ${escapeHtml(route.mode || "-")} ${route.requested_transit_type ? `(${escapeHtml(route.requested_transit_type)})` : ""}</div>
-                                <div>Distance: ${escapeHtml(route.distance_text || "-")} | Duration: ${escapeHtml(route.duration_text || "-")}</div>
-                                <div>Created: ${escapeHtml(route.created_at || "-")}</div>
+                                <div>Mode: ${escapeHtml(route.mode || "-")} ${route.transit_type ? `(${escapeHtml(route.transit_type)})` : ""}</div>
+                                <div>Distance: ${Number(route.distance_meters || 0).toLocaleString()} m | Duration: ${formatDuration(route.duration_seconds || 0)}</div>
+                                <div>Departure: ${escapeHtml(route.departure_at || "-")} | Arrival: ${escapeHtml(route.arrival_at || "-")}</div>
                             </div>
                         </div>
                     </div>
@@ -161,33 +146,46 @@ export async function openNavigationHistoryModal() {
 
 export async function refreshSystemStatus() {
     try {
-        const data = await fetchJson("/api/system_status", "Unable to load system status.");
+        const data = await fetchJson(dataUrls.status, `Unable to load system status for ${contextLabel()}.`);
         const statusText = (data.mission_stats?.status || (data.mission_active ? "running" : "idle")).toUpperCase();
         const status = $("mission-status");
         status.textContent = statusText;
         status.className = `status-pill ${statusText.toLowerCase()}`;
-        $("mission-state-text").textContent = statusText;
-        $("p2p-state-text").textContent = data.p2p_target ? "Ready" : "Standby";
+        $("mission-state-text").textContent = data.is_holding_final_position ? `${statusText} · FINAL ACTIVE` : statusText;
+        $("p2p-state-text").textContent = (data.phone_status || "standby").toUpperCase();
 
         $("mission-progress").textContent = `${data.mission_stats.completed_stops}/${data.mission_stats.total_stops}`;
         $("mission-target").textContent = data.mission_stats.current_target || "Idle";
         $("tunnel-url").textContent = data.p2p_target ? `P2P Target: ${data.p2p_target}` : "Tailscale standby";
         $("elapsed-time").textContent = formatDuration(data.elapsed_seconds);
-        $("speed-multiplier").textContent = `${data.speed_multiplier}x`;
-        $("guard-interval").textContent = `${data.guard_interval}s`;
+        $("initial-eta").textContent = data.initial_google_eta ? new Date(data.initial_google_eta).toLocaleTimeString() : "--";
+        $("latest-eta").textContent = data.latest_google_eta ? new Date(data.latest_google_eta).toLocaleTimeString() : "--";
         $("route-points").textContent = data.planned_route_points || 0;
-        $("mission-generation").textContent = data.mission_generation || 0;
-        $("log-session").textContent = data.log_session?.session_dir || "No active log session";
+        $("schedule-debt").textContent = `${Math.round(data.mission_stats?.schedule_debt_seconds || 0)}s`;
+        const missionError = $("mission-error");
+        missionError.textContent = data.mission_stats?.last_error || "";
+        missionError.hidden = !missionError.textContent;
+        $("log-session").textContent = data.log_session || "No active log session";
+        return true;
     } catch (error) {
         showToast(error.message || "Unable to load system status.", "error");
+        return false;
     }
 }
 
 export async function refreshPlannedRoute() {
     try {
-        const points = await fetchJson("/api/planned_route", "Unable to load the planned route.");
-        updatePlannedRoute(points);
+        const token = isHistoryPage ? "" : (refreshPlannedRoute.routeToken || "");
+        const separator = dataUrls.route.includes("?") ? "&" : "?";
+        const response = await apiFetch(`${dataUrls.route}${separator}route_token=${encodeURIComponent(token)}`);
+        if (response.status === 304) return;
+        if (!response.ok) throw new Error("Unable to load the planned route.");
+        const data = await response.json();
+        refreshPlannedRoute.routeToken = data.route_token;
+        updatePlannedRoute(data.points);
+        return true;
     } catch (error) {
         showToast(error.message || "Unable to load the planned route.", "error");
+        return false;
     }
 }

@@ -27,6 +27,8 @@ export function formatDuration(seconds) {
 
 export function extractTime(timestamp) {
     if (!timestamp) return "--:--:--";
+    const parsed = new Date(timestamp);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toLocaleTimeString();
     return timestamp.includes(" ") ? timestamp.split(" ")[1] : timestamp;
 }
 

@@ -1,6 +1,8 @@
 import { $, closeModal, showToast } from "./ui.js";
+import { isHistoryPage } from "./context.js";
+import { openCsvViewer, openLogViewer } from "./dataViewer.js";
 import { initMap, resetMapStats } from "./mapView.js";
-import { bindPlaybackControls, clearPlaybackData, fetchLiveCsvData } from "./playback.js";
+import { bindPlaybackControls, clearPlaybackData, loadInitialMovements } from "./playback.js";
 import { openHistoryModal, openMissionModal, openNavigationHistoryModal, refreshPlannedRoute, refreshSystemStatus } from "./panels.js";
 
 function bindShellControls() {
@@ -90,13 +92,13 @@ function bindShellControls() {
     document.querySelectorAll("[data-open-log]").forEach((button) => {
         button.addEventListener("click", () => {
             closeCommandMenu();
-            window.open(`/api/log/${button.dataset.openLog}`, "_blank");
+            openLogViewer(button.dataset.openLog);
         });
     });
 
     document.querySelector("[data-open-csv]").addEventListener("click", () => {
         closeCommandMenu();
-        window.open("/api/csv", "_blank");
+        openCsvViewer();
     });
 
     document.querySelector(".logout-form").addEventListener("submit", closeCommandMenu);
@@ -115,9 +117,24 @@ async function boot() {
         bindPlaybackControls();
         await refreshSystemStatus();
         await refreshPlannedRoute();
-        await fetchLiveCsvData();
-        setInterval(refreshSystemStatus, 1000);
-        setInterval(refreshPlannedRoute, 1500);
+        await loadInitialMovements();
+        const schedulePoll = (operation, baseDelay, maxDelay) => {
+            let delay = baseDelay;
+            const run = async () => {
+                if (document.hidden) {
+                    window.setTimeout(run, 10000);
+                    return;
+                }
+                const ok = await operation();
+                delay = ok === false ? Math.min(delay * 2, maxDelay) : baseDelay;
+                window.setTimeout(run, delay);
+            };
+            window.setTimeout(run, baseDelay);
+        };
+        if (!isHistoryPage) {
+            schedulePoll(refreshSystemStatus, 1000, 30000);
+            schedulePoll(refreshPlannedRoute, 1500, 30000);
+        }
     } catch (error) {
         showToast(error.message || "Dashboard initialization failed.", "error");
         console.error(error);

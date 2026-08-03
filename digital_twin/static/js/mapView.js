@@ -6,7 +6,6 @@ export const colors = {
     mrt: "#0A84FF",
     wait: "#BF5AF2",
     special: "#FF453A",
-    guardian: "#86868b",
 };
 
 let map;
@@ -15,6 +14,7 @@ let polylinesLayer;
 let pointsLayer;
 let plannedRouteLayer;
 let twinMarker;
+let plannedRouteDecorator = null;
 let activePolyline = null;
 let activePolylineColor = null;
 let lastDrawnRecord = null;
@@ -42,7 +42,6 @@ export function categorizeAction(action) {
 function colorForAction(action) {
     const value = String(action || "").toLowerCase();
     if (value.includes("precision") || value.includes("direct") || value.includes("alignment")) return colors.special;
-    if (value.includes("guardian")) return colors.guardian;
     return colors[categorizeAction(action)];
 }
 
@@ -66,16 +65,15 @@ export function initMap() {
         throw new Error("Leaflet failed to load. Check your network connection or CDN availability.");
     }
 
-    map = L.map("map", { zoomControl: false }).setView([25.1673, 121.4466], 15);
+    map = L.map("map", { zoomControl: false, preferCanvas: true }).setView([25.1673, 121.4466], 15);
     L.control.zoom({ position: "bottomright" }).addTo(map);
 
     const baseMaps = {
         osmDark: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }),
         cartoDark: L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 20 }),
-        googleStreets: L.tileLayer("https://mt0.google.com/vt/lyrs=m&hl=en&x={x}&y={y}&z={z}", { maxZoom: 20 }),
     };
 
-    currentBaseLayer = baseMaps.googleStreets;
+    currentBaseLayer = baseMaps.cartoDark;
     currentBaseLayer.addTo(map);
     polylinesLayer = L.featureGroup().addTo(map);
     pointsLayer = L.featureGroup().addTo(map);
@@ -92,11 +90,11 @@ export function initMap() {
     $("showPlannedRoute").addEventListener("change", (event) => {
         if (event.target.checked) {
             map.addLayer(plannedRouteLayer);
-            if (window.plannedRouteDecorator) map.addLayer(window.plannedRouteDecorator);
+            if (plannedRouteDecorator) map.addLayer(plannedRouteDecorator);
             fixLayerOrder();
         } else {
             map.removeLayer(plannedRouteLayer);
-            if (window.plannedRouteDecorator) map.removeLayer(window.plannedRouteDecorator);
+            if (plannedRouteDecorator) map.removeLayer(plannedRouteDecorator);
         }
     });
 
@@ -106,7 +104,6 @@ export function initMap() {
         ["Bus", colors.bus],
         ["Wait", colors.wait],
         ["Special", colors.special],
-        ["Guardian", colors.guardian],
     ].map(([name, color]) => `<div class="legend-item"><div class="color-dot" style="background:${color}"></div>${name}</div>`).join("");
 
     let resizeTimer;
@@ -139,11 +136,12 @@ export function renderRecordsIncremental(records, totalCount) {
     const typeFilter = $("typeFilter").value;
     const showPoints = $("showPoints").checked;
 
+    const pointStride = Math.max(1, Math.ceil(Number(totalCount || 0) / 5000));
     records.forEach((record) => {
         if (typeFilter !== "ALL" && categorizeAction(record.action) !== typeFilter) return;
 
         const latlng = [record.lat, record.lng];
-        const isContinuous = lastDrawnRecord && (record.originalIndex - lastDrawnRecord.originalIndex <= 2);
+        const isContinuous = lastDrawnRecord && (record.sequence - lastDrawnRecord.sequence <= 2);
         if (isContinuous) mapTotalDistance += calcDistKm(lastDrawnRecord.lat, lastDrawnRecord.lng, record.lat, record.lng);
 
         const recordColor = colorForAction(record.action);
@@ -158,7 +156,7 @@ export function renderRecordsIncremental(records, totalCount) {
             activePolyline.addLatLng(latlng);
         }
 
-        if (showPoints) {
+        if (showPoints && Number(record.sequence || 0) % pointStride === 0) {
             const tooltip = `<div><strong style="color:${recordColor}">${escapeHtml(record.action)}</strong><br><span>${escapeHtml(record.time)}</span></div>`;
             L.circleMarker(latlng, { radius: 4, color: "#fff", weight: 1, fillColor: recordColor, fillOpacity: 0.9 })
                 .bindTooltip(tooltip, { className: "custom-tooltip", direction: "top", opacity: 1 })
@@ -182,21 +180,21 @@ export function updateMarker(record, autoFollow) {
 export function updatePlannedRoute(points) {
     if (!Array.isArray(points) || points.length === 0) {
         plannedRouteLayer.setLatLngs([]);
-        if (window.plannedRouteDecorator) {
-            map.removeLayer(window.plannedRouteDecorator);
-            window.plannedRouteDecorator = null;
+        if (plannedRouteDecorator) {
+            map.removeLayer(plannedRouteDecorator);
+            plannedRouteDecorator = null;
         }
         return;
     }
 
     plannedRouteLayer.setLatLngs(points.map((point) => [point.lat, point.lng]));
-    if (window.plannedRouteDecorator) map.removeLayer(window.plannedRouteDecorator);
-    window.plannedRouteDecorator = L.polylineDecorator(plannedRouteLayer, {
+    if (plannedRouteDecorator) map.removeLayer(plannedRouteDecorator);
+    plannedRouteDecorator = typeof L.polylineDecorator === "function" ? L.polylineDecorator(plannedRouteLayer, {
         patterns: [{ offset: 25, repeat: 100, symbol: L.Symbol.arrowHead({ pixelSize: 12, polygon: false, pathOptions: { stroke: true, weight: 2, color: colors.special } }) }],
-    });
+    }) : null;
     if ($("showPlannedRoute").checked) {
         if (!map.hasLayer(plannedRouteLayer)) map.addLayer(plannedRouteLayer);
-        map.addLayer(window.plannedRouteDecorator);
+        if (plannedRouteDecorator) map.addLayer(plannedRouteDecorator);
     }
     fixLayerOrder();
 }

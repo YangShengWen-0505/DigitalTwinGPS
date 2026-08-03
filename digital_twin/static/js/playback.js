@@ -1,89 +1,24 @@
-import { apiFetch } from "./api.js";
+import { fetchJson } from "./api.js";
+import { contextLabel, dataUrls, isHistoryPage } from "./context.js";
 import { $, extractTime, showToast } from "./ui.js";
 import { renderRecords, renderRecordsIncremental, updateMarker } from "./mapView.js";
 
 let allRecords = [];
-let totalLinesRead = 0;
-let isLive = true;
+let cursor = 0;
+let streamId = null;
+let followingLive = !isHistoryPage;
 let isPlaying = false;
 let playbackIndex = 0;
 let playTimer = null;
-let csvFetchTimer = null;
-let csvFetchInterval = 1000;
-let dataSource = { mode: "current", url: "/api/csv" };
-
-function parseCsvRows(csvText) {
-    const rows = [];
-    let row = [];
-    let field = "";
-    let inQuotes = false;
-
-    for (let index = 0; index < csvText.length; index += 1) {
-        const char = csvText[index];
-        const next = csvText[index + 1];
-
-        if (char === '"') {
-            if (inQuotes && next === '"') {
-                field += '"';
-                index += 1;
-            } else {
-                inQuotes = !inQuotes;
-            }
-            continue;
-        }
-
-        if (char === "," && !inQuotes) {
-            row.push(field);
-            field = "";
-            continue;
-        }
-
-        if ((char === "\n" || char === "\r") && !inQuotes) {
-            if (char === "\r" && next === "\n") index += 1;
-            row.push(field);
-            if (row.some((value) => value.length > 0)) rows.push(row);
-            row = [];
-            field = "";
-            continue;
-        }
-
-        field += char;
-    }
-
-    row.push(field);
-    if (row.some((value) => value.length > 0)) rows.push(row);
-    return rows;
-}
-
-function parseCsvLines(csvText, startingLine) {
-    const rows = parseCsvRows(csvText);
-    const records = [];
-    let lineCursor = startingLine;
-
-    rows.forEach((cols, index) => {
-        if (lineCursor === 0 && index === 0 && cols[0] === "Timestamp") {
-            lineCursor += 1;
-            return;
-        }
-        if (cols.length >= 4) {
-            const lat = parseFloat(cols[1]);
-            const lng = parseFloat(cols[2]);
-            const action = cols[3];
-            if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
-                records.push({ originalIndex: lineCursor, time: cols[0], lat, lng, action });
-            }
-        }
-        lineCursor += 1;
-    });
-
-    return { records, nextLine: lineCursor };
-}
+let movementTimer = null;
+let fetchInterval = 1000;
+let lastErrorMessage = "";
 
 function syncPlaybackUi() {
     const slider = $("timeSlider");
     slider.max = Math.max(0, allRecords.length - 1);
-    slider.value = Math.min(playbackIndex, allRecords.length - 1);
-    $("playback-end-time").textContent = allRecords.length ? extractTime(allRecords[allRecords.length - 1].time) : "--:--:--";
+    slider.value = Math.min(playbackIndex, Math.max(0, allRecords.length - 1));
+    $("playback-end-time").textContent = allRecords.length ? extractTime(allRecords.at(-1).time) : "--:--:--";
 }
 
 export function updatePlaybackState() {
@@ -95,24 +30,19 @@ export function updatePlaybackState() {
     $("lng").textContent = record.lng.toFixed(6);
     $("action").textContent = record.action;
     $("lastFix").textContent = extractTime(record.time);
-    $("liveMode").textContent = isLive ? "LIVE" : "PLAY";
-    $("liveBtn").classList.toggle("active", isLive);
-    $("status-title-text").textContent = isLive ? "Current Status (LIVE)" : "Historical Playback";
+    $("liveMode").textContent = isHistoryPage ? "HISTORY" : (followingLive ? "LIVE" : "PLAYBACK");
+    $("liveBtn").classList.toggle("active", followingLive && !isHistoryPage);
+    $("status-title-text").textContent = isHistoryPage ? contextLabel() : "Current Status (LIVE)";
     updateMarker(record, $("autoFollow").checked);
 }
 
-export function toggleLiveMode(forceLive) {
-    isLive = forceLive !== undefined ? forceLive : !isLive;
-    if (isLive) {
-        dataSource = { mode: "current", url: "/api/csv" };
-        totalLinesRead = 0;
-        allRecords = [];
-        playbackIndex = 0;
-        renderRecords([]);
-        if (isPlaying) togglePlay();
-    }
-    $("liveBtn").classList.toggle("active", isLive);
-    $("liveMode").textContent = isLive ? "LIVE" : "PLAY";
+function resetRecords() {
+    allRecords = [];
+    cursor = 0;
+    streamId = null;
+    playbackIndex = 0;
+    syncPlaybackUi();
+    renderRecords([]);
 }
 
 export function togglePlay() {
@@ -121,13 +51,14 @@ export function togglePlay() {
         return;
     }
     isPlaying = !isPlaying;
-    $("playPauseBtn").innerHTML = isPlaying ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>';
+    $("playPauseBtn").innerHTML = isPlaying
+        ? '<i class="fa-solid fa-pause"></i>'
+        : '<i class="fa-solid fa-play"></i>';
     if (!isPlaying) {
         clearInterval(playTimer);
         return;
     }
-
-    isLive = false;
+    followingLive = false;
     if (playbackIndex >= allRecords.length - 1) playbackIndex = 0;
     playTimer = setInterval(() => {
         if (playbackIndex < allRecords.length - 1) {
@@ -139,87 +70,96 @@ export function togglePlay() {
     }, 100);
 }
 
-export function clearPlaybackData() {
-    allRecords = [];
-    totalLinesRead = 0;
-    playbackIndex = 0;
-    syncPlaybackUi();
-    renderRecords([]);
-}
-
-export async function loadCsvFromUrl(url, { append = false, live = false } = {}) {
-    const response = await apiFetch(url);
-    if (response.status === 404) {
-        if (!append) clearPlaybackData();
-        throw new Error(live ? "No live movement data is available yet." : "No movement CSV was found for this mission.");
-    }
-    if (!response.ok) throw new Error(`CSV request failed with HTTP ${response.status}.`);
-
-    const text = await response.text();
-    if (!text.trim()) return [];
-
-    const start = append ? totalLinesRead : 0;
-    const { records, nextLine } = parseCsvLines(text, start);
-    totalLinesRead = append ? nextLine : nextLine;
-
+async function loadMovementPage({ append, live }) {
+    const page = await fetchJson(
+        `${dataUrls.movements}?offset=${append ? cursor : 0}&limit=500`,
+        "Unable to load movement data.",
+    );
+    if (streamId && page.stream_id !== streamId) resetRecords();
+    streamId = page.stream_id;
+    cursor = page.next_offset;
+    const records = Array.isArray(page.records) ? page.records : [];
     if (!append) {
         allRecords = records;
-        playbackIndex = allRecords.length ? allRecords.length - 1 : 0;
+        playbackIndex = Math.max(0, records.length - 1);
         renderRecords(allRecords);
     } else if (records.length) {
         allRecords.push(...records);
         renderRecordsIncremental(records, allRecords.length);
-        if (isLive) playbackIndex = allRecords.length - 1;
+        if (live) playbackIndex = allRecords.length - 1;
     }
-
     syncPlaybackUi();
     if (allRecords.length) updatePlaybackState();
-    return records;
+    return page;
 }
 
-export function scheduleLiveCsvFetch() {
-    clearTimeout(csvFetchTimer);
-    csvFetchTimer = setTimeout(fetchLiveCsvData, csvFetchInterval);
+function scheduleMovementFetch(delay = fetchInterval) {
+    clearTimeout(movementTimer);
+    if (!isHistoryPage) movementTimer = setTimeout(fetchLiveMovements, delay);
 }
 
-export async function fetchLiveCsvData() {
-    if (dataSource.mode !== "current") return;
+export async function fetchLiveMovements() {
+    if (isHistoryPage) return;
+    if (document.hidden) {
+        scheduleMovementFetch(10000);
+        return;
+    }
     try {
-        const records = await loadCsvFromUrl(`/api/csv?start_line=${totalLinesRead}`, { append: true, live: true });
-        csvFetchInterval = records.length ? 1000 : Math.min(csvFetchInterval * 1.2, 1800);
+        const page = await loadMovementPage({ append: true, live: true });
+        fetchInterval = page.records?.length ? 1000 : Math.min(fetchInterval * 1.3, 5000);
+        if (lastErrorMessage) showToast("Live movement connection restored.");
+        lastErrorMessage = "";
+        scheduleMovementFetch(page.has_more ? 0 : fetchInterval);
     } catch (error) {
-        if (!String(error.message).includes("No live movement data")) {
-            showToast(error.message || "Unable to load live CSV data.", "error");
-        }
-        csvFetchInterval = Math.min(csvFetchInterval * 1.4, 2200);
-    } finally {
-        scheduleLiveCsvFetch();
+        const message = error.message || "Unable to load live movement data.";
+        if (message !== lastErrorMessage) showToast(message, "error");
+        lastErrorMessage = message;
+        fetchInterval = Math.min(fetchInterval * 2, 30000);
+        scheduleMovementFetch(fetchInterval);
     }
 }
 
-export async function loadHistorySession(session) {
-    if (isPlaying) togglePlay();
-    isLive = false;
-    dataSource = { mode: "history", url: `/api/history/${encodeURIComponent(session.date)}/${encodeURIComponent(session.session)}/csv` };
-    clearPlaybackData();
-    await loadCsvFromUrl(dataSource.url, { append: false, live: false });
-    $("status-title-text").textContent = `Historical Playback (${session.id})`;
-    $("liveMode").textContent = "HISTORY";
-    $("liveBtn").classList.remove("active");
+export async function loadInitialMovements() {
+    if (!isHistoryPage) {
+        await fetchLiveMovements();
+        return;
+    }
+    resetRecords();
+    let page = await loadMovementPage({ append: false, live: false });
+    while (page.has_more) {
+        page = await loadMovementPage({ append: true, live: false });
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+}
+
+export function clearPlaybackData() {
+    resetRecords();
 }
 
 export function bindPlaybackControls() {
     $("playPauseBtn").addEventListener("click", togglePlay);
-    $("liveBtn").addEventListener("click", () => {
-        toggleLiveMode(true);
-        showToast("Returned to live mode.");
-    });
+    if (isHistoryPage) {
+        $("liveBtn").textContent = "HISTORY";
+        $("liveBtn").disabled = true;
+        $("liveBtn").classList.remove("active");
+    } else {
+        $("liveBtn").addEventListener("click", () => {
+            if (isPlaying) togglePlay();
+            followingLive = true;
+            playbackIndex = Math.max(0, allRecords.length - 1);
+            updatePlaybackState();
+            showToast("Returned to the latest live position.");
+        });
+    }
     $("timeSlider").addEventListener("input", (event) => {
         if (isPlaying) togglePlay();
-        isLive = false;
+        followingLive = false;
         playbackIndex = Number(event.target.value);
         updatePlaybackState();
     });
     $("showPoints").addEventListener("change", () => renderRecords(allRecords));
     $("typeFilter").addEventListener("change", () => renderRecords(allRecords));
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && !isHistoryPage) scheduleMovementFetch(0);
+    });
 }
