@@ -1,8 +1,8 @@
 import threading
 from datetime import datetime, timedelta, timezone
 
-from digital_twin import config, db, logger
-from digital_twin.core import navigation
+from mock_gps import config, db, logger
+from mock_gps.core import navigation, planner
 
 
 def test_mrt_speed_is_capped_at_135_percent():
@@ -142,3 +142,65 @@ def test_sigterm_requests_graceful_worker_shutdown(monkeypatch):
     installed[navigation.signal.SIGTERM]()
     assert shutdown.is_set()
     assert previous[navigation.signal.SIGTERM] == "previous"
+
+
+def test_replan_keeps_the_current_stop_scheduled_departure():
+    # plan_mission() applies stops[i].wait_time when leaving stop i, so a
+    # replan that starts from "now" would silently drop it.
+    arrival = datetime(2026, 8, 4, 6, 55, tzinfo=timezone.utc)
+    stop = {"name": "Home", "wait_time": "15:30", "skip_if_late": False}
+    resume_at = planner.scheduled_departure(arrival.astimezone(config.TIMEZONE), stop)
+    assert resume_at.hour == 15
+    assert resume_at.minute == 30
+    assert resume_at.date() == arrival.astimezone(config.TIMEZONE).date()
+
+
+def test_replan_departs_immediately_for_a_late_skippable_stop():
+    arrival = datetime(2026, 8, 4, 10, 0, tzinfo=timezone.utc)
+    local_arrival = arrival.astimezone(config.TIMEZONE)
+    stop = {"name": "Home", "wait_time": "01:00", "skip_if_late": True}
+    assert planner.scheduled_departure(local_arrival, stop) == local_arrival
+
+
+def test_replan_uses_scheduled_departure_as_plan_start_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "replan.sqlite3")
+    db.init_db()
+    stops = [
+        {"name": "A", "mode": "walking", "wait_time": "23:45", "skip_if_late": False},
+        {"name": "B", "mode": "walking", "wait_time": "", "skip_if_late": False},
+    ]
+    plan = _plan()
+    plan["routes"][0]["arrival_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=300)
+    ).isoformat()
+    plan["routes"].append(dict(plan["routes"][0], destination="B"))
+    mission_id = db.create_mission({"init_loc": "25,121", "stops": stops}, plan)
+    db.claim_next("worker")
+    db.update_mission(mission_id, last_lat=25.0, last_lng=121.0)
+
+    captured = {}
+
+    def fake_plan(origin, remaining, *, start_time=None):
+        captured["origin"] = origin
+        captured["remaining"] = remaining
+        captured["start_time"] = start_time
+        # End the mission here; otherwise execute_mission() would enter the
+        # final-position hold loop and never return.
+        db.update_mission(mission_id, cancel_requested=1)
+        return _plan()
+
+    monkeypatch.setattr(navigation, "plan_mission", fake_plan)
+    monkeypatch.setattr(navigation, "move_step", lambda *_a, **_k: True)
+    monkeypatch.setattr(navigation, "_wait_until", lambda *_a, **_k: True)
+    monkeypatch.setattr(navigation, "send_position", lambda *_a, **_k: None)
+    monkeypatch.setattr(navigation.logger, "init_task_logs", lambda *_a: {"session_dir": None})
+    monkeypatch.setattr(navigation.logger, "write_mission_snapshot", lambda *_a: None)
+
+    shutdown = threading.Event()
+    mission = db.get_mission(mission_id)
+    navigation.execute_mission(mission, shutdown)
+
+    assert captured["start_time"] is not None
+    assert captured["start_time"].hour == 23
+    assert captured["start_time"].minute == 45
+    assert [stop["name"] for stop in captured["remaining"]] == ["B"]

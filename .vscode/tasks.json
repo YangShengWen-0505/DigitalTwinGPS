@@ -1,0 +1,24 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "create-venv",
+            "type": "shell",
+            "command": "if (-not (Test-Path .venv)) { py -3.12 -m venv .venv }",
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe",
+                    "args": ["-NoProfile", "-Command"]
+                }
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "install-deps",
+            "type": "shell",
+            "command": ".venv\\Scripts\\python -m pip install -q -r requirements-lock.txt",
+            "dependsOn": "create-venv",
+            "problemMatcher": []
+        }
+    ]
+}

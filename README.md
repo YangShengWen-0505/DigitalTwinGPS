@@ -1,6 +1,6 @@
-# DigitalTwinGPS
+# Mock GPS Follow Live Nav
 
-DigitalTwinGPS 是一個供自有應用程式與私有測試環境使用的 GPS Digital Twin 系統。Flask web、獨立 mission worker 與 SQLite 共同管理 Google Maps 路線、連續 GPS 座標及 Tailscale 手機傳送。請勿用於偽造出勤、規避第三方服務控制或違反適用法律與服務條款的用途。
+Mock GPS Follow Live Nav 是一個供自有應用程式與私有測試環境使用的 GPS 模擬與即時導航跟隨系統。Flask web、獨立 mission worker 與 SQLite 共同管理 Google Maps 路線、連續 GPS 座標及 Tailscale 手機傳送。請勿用於偽造出勤、規避第三方服務控制或違反適用法律與服務條款的用途。
 
 ## 功能
 
@@ -21,27 +21,29 @@ DigitalTwinGPS 是一個供自有應用程式與私有測試環境使用的 GPS 
 ## 專案結構
 
 ```text
-DigitalTwinGPS/
-├─ run_server.py
-├─ run_worker.py
+mock-gps-follow-live-nav/
+├─ start_local.py
 ├─ requirements.txt
 ├─ requirements-dev.txt
-├─ Caddyfile
+├─ requirements-lock.txt
 ├─ README.md
+├─ LICENSE
 ├─ .env.example
-├─ DigitalTwinGPS(example).category
-├─ .devcontainer/
-│  ├─ Dockerfile
-│  ├─ docker-compose.yml
-│  ├─ docker-compose.dev.yml
-│  └─ devcontainer.json
-└─ digital_twin/
+├─ macrodroid-example.category
+├─ .github/workflows/ci.yml
+├─ .vscode/
+│  ├─ launch.json
+│  ├─ tasks.json
+│  └─ settings.json
+├─ tests/
+└─ mock_gps/
    ├─ config.py
-   ├─ logger.py
    ├─ db.py
+   ├─ logger.py
+   ├─ history.py
    ├─ api/
    ├─ core/
-   ├─ data/settings.json
+   ├─ resources/settings.json
    ├─ static/
    └─ templates/
 ```
@@ -81,31 +83,80 @@ copy .env.example .env
 
 ```ini
 GOOGLE_MAPS_API_KEY="YOUR_GOOGLE_MAPS_API_KEY"
-PC_TAILSCALE_IP="100.x.x.x"
 PHONE_TAILSCALE_IP="100.x.x.x"
 API_SECRET_KEY="replace_with_a_long_random_secret"
 API_ACCESS_KEY="replace_with_a_different_random_secret"
 FLASK_SESSION_SECRET="replace_with_another_random_secret"
-USE_CADDY="false"
+BIND_HOST="127.0.0.1"
 FLASK_PORT=5050
-HOST_PORT=5050
 TZ="Asia/Taipei"
 ```
 
-三組 secret 請使用不同且至少 16 字元的隨機字串；MacroDroid 任務控制使用 `API_ACCESS_KEY`。
+`API_SECRET_KEY` 必須有值，長度不限；`API_ACCESS_KEY` 與 `FLASK_SESSION_SECRET` 可省略並沿用它，也可以另外設定。MacroDroid 任務控制使用實際生效的 `API_ACCESS_KEY`。
+
+## 安裝
+
+專案不需要 Docker，只需要一個 Python 虛擬環境（3.10 以上皆可）。第一次執行：
+
+```bash
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-lock.txt
+```
+
+要跑測試與 lint 時再裝開發相依：
+
+```bash
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+```
+
+用 VS Code 開啟專案資料夾時，`.vscode/tasks.json` 會在啟動前自動完成建立 venv 與安裝執行相依這兩步，不必手動執行。
 
 ## 啟動
 
+用 VS Code 開啟專案資料夾後按 `F5`，選擇 `Mock GPS Follow Live Nav (web + worker)`。或在終端機執行：
+
 ```bash
-python run_server.py
-python run_worker.py
+.venv\Scripts\python start_local.py
 ```
+
+`start_local.py` 是單一進程：Flask dashboard 跑在背景執行緒，mission worker 跑在主執行緒。兩者共用同一個 SQLite 連線池與 log 設定。
+
+停止時按 `Ctrl+C`，或按 VS Code 的停止鍵。整個進程結束，不會留下任何背景服務。目前仍在 planning、queued、running 或 degraded 的任務會標記為 `interrupted`，下次啟動不會續跑，必須由使用者重新傳送指令。SQLite、歷史任務、movement CSV、logs 與封存檔都會保留。
+
+即使進程被強制終止（例如按 VS Code 停止鍵而非 Ctrl+C），下次啟動時 worker 取得 lease 後會自動把殘留在 `running` 的任務回收成 `interrupted`，並在 log 記錄 `Reclaimed N orphaned mission(s) on worker startup`。
+
+重啟後 Dashboard **不會**顯示上次被中斷的任務：狀態回到 `IDLE`，地圖上的規劃路線與軌跡都清空。該次執行的完整紀錄仍保留在任務歷史中，可從歷史頁面查看。任務表單則仍保留上次送出的站點，方便直接重新送出。
+
+`completed`、`stopped`、`aborted`、`failed` 的任務不受影響，重啟後仍會顯示——那些是使用者主動造成的結果，需要被看到。
+
+## 網路存取
+
+`BIND_HOST` 是唯一的網路設定，預設 `127.0.0.1`（僅限本機）。
+
+要讓手機透過 Tailscale 連入 Dashboard 時，填入本機的 Tailscale IP：
+
+```ini
+BIND_HOST="100.x.x.x"
+```
+
+此時服務會**同時**監聽 `127.0.0.1` 與該 Tailscale IP，兩個網址都可用：
+
+```text
+http://127.0.0.1:5050/map      # 本機
+http://100.x.x.x:5050/map      # 手機經 Tailscale
+```
+
+`BIND_HOST` 只是「額外開放的介面」，`127.0.0.1` 永遠保留。若只綁單一位址，本機的 `127.0.0.1` 會連不上——這是 socket 綁定的行為，不是設定錯誤。
+
+不要填 `0.0.0.0`。那會把未加密的 Dashboard 暴露在整個 LAN 上；服務一律以 HTTP 提供，session cookie 沒有 `Secure` 旗標，會以明文傳輸。
+
+Tailscale 未連線時，綁定該 IP 會失敗並印出提示；先確認 Tailscale 已連上再啟動。
 
 預設網址：
 
 ```text
 http://localhost:5050/map
-https://<PC_TAILSCALE_IP>/map  # 使用 Caddy 時
+http://<BIND_HOST>:5050/map  # Tailscale HTTP
 ```
 
 進入 `/map` 時會導向 `/login`，請輸入 `.env` 中的 `API_SECRET_KEY`。
@@ -114,17 +165,19 @@ https://<PC_TAILSCALE_IP>/map  # 使用 Caddy 時
 
 PC 與 Android 手機需要登入同一個 Tailscale tailnet。PC 透過手機的 Tailscale IP 呼叫 MacroDroid HTTP Server，手機也可透過 PC 的 Tailscale IP 呼叫任務控制 API。
 
-PC 端設定：
+PC 端設定——把 `BIND_HOST` 填成本機的 Tailscale IP，服務才會在該位址上聽：
 
 ```ini
-PC_TAILSCALE_IP="100.x.x.x"
+BIND_HOST="100.x.x.x"
 ```
 
-手機端設定：
+手機端設定——PC 要送座標過去的手機 Tailscale IP：
 
 ```ini
 PHONE_TAILSCALE_IP="100.x.x.x"
 ```
+
+手機端的 MacroDroid 則把 `g_server_url` 指向 PC 的 Tailscale IP，`.env` 不需要另外記錄它。
 
 PC 會送出座標到：
 
@@ -132,47 +185,24 @@ PC 會送出座標到：
 http://<PHONE_TAILSCALE_IP>:8080/gps?lat=25.xxxxxxx&lng=121.xxxxxxx
 ```
 
-建議只在 Tailscale 或可信任內網使用。若要更完整的 HTTPS 體驗，可使用 Caddy 搭配固定 Tailscale IP 或 MagicDNS。
-
-## Caddy HTTPS
-
-若使用 Caddy 作為 HTTPS 反向代理，將 `.env` 設為：
-
-```ini
-USE_CADDY="true"
-```
-
-啟動 Flask：
-
-```bash
-python run_server.py
-```
-
-另一個終端機啟動 Caddy：
-
-```bash
-caddy run --config Caddyfile
-```
-
-`USE_CADDY=true` 時 Flask 綁定在 `127.0.0.1`，由 Caddy 對外提供 HTTPS。
+服務只提供 HTTP，沒有內建 HTTPS，請只在 Tailscale 或可信任內網使用。Tailscale 本身已對節點之間的流量加密。
 
 ## Android MacroDroid
 
-專案根目錄提供 `DigitalTwinGPS(example).category`，可匯入 MacroDroid 作為範例分類。匯入後請修改：
+專案根目錄提供 `macrodroid-example.category`，可匯入 MacroDroid 作為範例分類。匯入後請修改：
 
-- 全域變數 `g_server_url`
-- HTTP Request header `X-API-Key`
+- 區域變數 `g_server_url`（Mission Controller 與 Stop GPS 各有一份，兩邊都要改）
+- HTTP Request header `API-ACCESS-KEY`
 - MacroDroid HTTP Server port
 - GPS Joystick / Mock Location 權限
-- HTTPS 憑證信任設定
 
 ### Mission Controller
 
 用途：在手機上輸入任務資料，送到 PC 的 `/start_task`。
 
 - Method：`POST`
-- URL：`{v=g_server_url}/start_task`
-- Header：`X-API-Key: <API_ACCESS_KEY>`
+- URL：`{lv=g_server_url}/start_task`
+- Header：`API-ACCESS-KEY: <API_ACCESS_KEY>`
 - Content-Type：`application/json`
 - Timeout：30 秒即可；伺服器驗證後立即回 `202`，Google 路線由 worker 非同步規劃
 
@@ -194,7 +224,7 @@ caddy run --config Caddyfile
 }
 ```
 
-### Smart GPS Agent
+### Move GPS
 
 用途：手機端接收 PC 傳來的座標，並轉發給 GPS Joystick。
 
@@ -215,8 +245,8 @@ http://<PHONE_TAILSCALE_IP>:8080/gps?lat=25.xxxxxxx&lng=121.xxxxxxx
 用途：從手機呼叫 PC 的 `/stop_task`，停止伺服器端任務。
 
 - Method：`POST`
-- URL：`{v=g_server_url}/stop_task`
-- Header：`X-API-Key: <API_ACCESS_KEY>`
+- URL：`{lv=g_server_url}/stop_task`
+- Header：`API-ACCESS-KEY: <API_ACCESS_KEY>`
 
 手機端會停留在最後一次收到的 Mock Location。
 
@@ -225,7 +255,7 @@ http://<PHONE_TAILSCALE_IP>:8080/gps?lat=25.xxxxxxx&lng=121.xxxxxxx
 任務控制 API 必須帶入：
 
 ```http
-X-API-Key: <API_ACCESS_KEY>
+API-ACCESS-KEY: <API_ACCESS_KEY>
 Content-Type: application/json
 ```
 
@@ -282,7 +312,7 @@ http://localhost:5050/map
 
 ## 監控 API
 
-監控 API 可使用登入 session 或 `X-API-Key`。
+監控 API 可使用登入 session 或 `API-ACCESS-KEY`。
 
 | API | 說明 |
 |---|---|
@@ -309,8 +339,7 @@ movement record 的 `sequence` 是 session 內單調遞增列序號；`next_offs
 常駐 log：
 
 ```text
-logs/web.log
-logs/worker.log
+logs/app.log     # start_local.py（web + worker 同一進程）
 ```
 
 每次任務會建立獨立 session：
@@ -332,8 +361,8 @@ Sequence,Timestamp,Latitude,Longitude,Action,Note,TimestampISO,DeltaSeconds,Dist
 ```
 
 - `Sequence`：session 內單調遞增的 movement 列序號。
-- `Timestamp`：UTC 時間，含毫秒與 `Z` 標記。
-- `TimestampISO`：aware UTC ISO 時間，含毫秒。
+- `Timestamp`：以 UTC 儲存，含毫秒與 `Z` 標記；Dashboard 依 `TZ` 轉換後顯示。
+- `TimestampISO`：aware UTC ISO 時間，含毫秒；Dashboard 依 `TZ` 轉換後顯示。
 - `DeltaSeconds`：與上一筆實際紀錄的時間差，單位秒。
 - `DistanceMeters`：與上一筆實際紀錄座標的距離，單位公尺。
 
@@ -344,7 +373,7 @@ Sequence,Timestamp,Latitude,Longitude,Action,Note,TimestampISO,DeltaSeconds,Dist
 設定檔位置：
 
 ```text
-digital_twin/data/settings.json
+mock_gps/resources/settings.json
 ```
 
 主要設定：
@@ -355,28 +384,26 @@ digital_twin/data/settings.json
 
 程式啟動時會自動將 `mrt_station_groups` 攤平成內部使用的 MRT 到站偵測資料庫。
 
-## Dev Container
+## 開發
 
-VS Code 可透過 `.devcontainer` 建立開發環境。Dev override 會把主機原始碼掛載到 `/workspace`，並預設只啟動 web；worker 放在 `mission-worker` profile，避免開啟開發容器時意外向手機傳送座標。正式 Compose 仍提供獨立 web 與 worker，共用 SQLite 與 logs volume，容器使用非 root 帳號。
+`start_local.py` 是唯一的進入點，把 web 與 worker 跑在同一個進程，適合日常開發與除錯：VS Code 的中斷點在兩邊都有效。
 
-```bash
-docker compose --env-file .env -f .devcontainer/docker-compose.yml up --build
-```
+同一個資料夾一次只能跑一個實例——`data/instance.lock` 會擋下第二個，worker lease 也只允許一個持有者。
 
-需要在開發環境啟動 worker 時：
+測試：
 
 ```bash
-docker compose --env-file .env -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.dev.yml --profile mission-worker up
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\python -m pytest
+.venv\Scripts\python -m ruff check .
 ```
-
-停止 Dev Container 或關閉對應容器時，Compose 會停止 `digitaltwingps` 底下的容器。
 
 ## 資訊安全
 
 - 任務控制 API 必須使用獨立的 `API_ACCESS_KEY`
 - Web dashboard 需登入或使用有效 API key
 - API key 使用 constant-time comparison
-- Flask session cookie 一律設定 `HttpOnly`、`SameSite=Strict`；使用 `USE_CADDY=true` 的 HTTPS 模式時另啟用 `Secure`
+- Flask session cookie 一律設定 `HttpOnly`、`SameSite=Strict`；因為服務以 HTTP 提供，不啟用 `Secure`
 - Log 不記錄 API key
 - Response 加入安全標頭：
   - `X-Content-Type-Options: nosniff`
@@ -390,19 +417,20 @@ docker compose --env-file .env -f .devcontainer/docker-compose.yml -f .devcontai
 可上傳的範例與設定：
 
 - `.env.example`
-- `DigitalTwinGPS(example).category`
-- `.devcontainer/`
-- `digital_twin/data/settings.json`
+- `macrodroid-example.category`
+- `.vscode/launch.json`、`.vscode/tasks.json`、`.vscode/settings.json`
+- `mock_gps/resources/settings.json`
 
 不應上傳的本機資料：
 
 - `.env`
 - `logs/`
+- `data/`
 - `*.log`
 - `*.csv`
 - `.venv/`
 - `AI.md`
-- IDE 本機設定
+- 其他 IDE 本機設定
 
 ## 疑難排解
 
@@ -411,17 +439,17 @@ docker compose --env-file .env -f .devcontainer/docker-compose.yml -f .devcontai
 | 無法啟動伺服器 | 檢查 `.env` 是否存在，`API_SECRET_KEY` 是否已設定 |
 | Google Maps 沒有路線 | 檢查 `GOOGLE_MAPS_API_KEY` 與 Directions API 是否啟用 |
 | 手機沒收到座標 | 檢查 Tailscale、`PHONE_TAILSCALE_IP`、MacroDroid `/gps`、手機防火牆 |
-| MacroDroid 任務送出失敗 | 檢查 `g_server_url`、`X-API-Key`、HTTPS 憑證設定 |
-| `/api/*` 回傳 401 | 重新登入 `/login` 或確認 `X-API-Key` |
+| MacroDroid 任務送出失敗 | 檢查 `g_server_url`、`API-ACCESS-KEY`、Tailscale 連線 |
+| `/api/*` 回傳 401 | 重新登入 `/login` 或確認 `API-ACCESS-KEY` |
 | 地圖空白 | 檢查本機 vendor 靜態資源與瀏覽器 console |
 | 沒有歷史 CSV | 確認任務已開始，並檢查 `logs/YYYY-MM-DD/HH-MM-SS/` |
 
 ## 驗證指令
 
 ```bash
-python -m py_compile run_server.py run_worker.py digital_twin/*.py digital_twin/api/*.py digital_twin/core/*.py
+python -m compileall -q mock_gps start_local.py
 python -m pytest
-ruff check digital_twin tests run_server.py run_worker.py
+ruff check .
 ```
 
 ## 授權

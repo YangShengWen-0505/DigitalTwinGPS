@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Mock GPS Follow Live Nav (web + worker)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/start_local.py",
+            "cwd": "${workspaceFolder}",
+            // Pinned so F5 always uses the project venv. defaultInterpreterPath
+            // is only a fallback and loses to whatever interpreter the user
+            // picked before the venv existed.
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "preLaunchTask": "install-deps"
+        }
+    ]
+}

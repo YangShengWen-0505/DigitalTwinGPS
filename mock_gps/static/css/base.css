@@ -1,0 +1,82 @@
+/* Design tokens, reset, page shell, and the map canvas. */
+
+:root {
+    --panel: rgba(23, 25, 27, 0.94);
+    --panel-solid: #17191b;
+    --panel-raised: #202327;
+    --panel-soft: rgba(255, 255, 255, 0.045);
+    --border: rgba(232, 226, 214, 0.13);
+    --text: #f2f0eb;
+    --muted: #aaa69d;
+    --faint: #757169;
+    --accent: #d09a44;
+    --accent-soft: rgba(208, 154, 68, 0.14);
+    --blue: #6f98b7;
+    --green: #68b684;
+    --red: #d7665f;
+    --orange: #d6a15d;
+    --violet: #9f86a9;
+    --radius: 7px;
+    --radius-sm: 5px;
+    --shadow: 0 18px 44px rgba(6, 7, 8, 0.42);
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    overflow: hidden;
+    background: #101113;
+    color: var(--text);
+    font-family: Aptos, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    letter-spacing: 0;
+    min-width: 320px;
+    min-height: 100vh;
+    min-height: 100dvh;
+    touch-action: manipulation;
+}
+
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background:
+        linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mix-blend-mode: screen;
+    opacity: 0.28;
+}
+
+#map {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+}
+
+.dark-filter .leaflet-tile-pane { filter: grayscale(72%) invert(100%) contrast(88%); }
+.leaflet-control-attribution { display: none; }
+
+#dashboard-shell {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    pointer-events: none;
+    min-width: 320px;
+}
+
+.surface {
+    pointer-events: auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}

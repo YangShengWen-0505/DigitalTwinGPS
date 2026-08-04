@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from digital_twin import config
-from digital_twin.core.planner import plan_mission
+from mock_gps import config
+from mock_gps.core.planner import plan_mission
 
 
 class FakeMaps:

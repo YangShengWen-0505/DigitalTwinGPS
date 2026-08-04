@@ -18,15 +18,22 @@ logs/
 /data/
 
 # IDE and OS metadata
-.vscode/
+# The launch/task configs are part of the one-file startup workflow.
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
 .idea/
 .DS_Store
 Thumbs.db
-
-# Dev Container local metadata
-.devcontainer/.DS_Store
+# Scratch file the Code Runner extension writes when running a selection.
+tempCodeRunnerFile.py
 
 # Local test artifacts
 .pytest_cache/
+.ruff_cache/
 .playwright-cli/
 graphify-out/
+
+# Local development notes; must never be published.
+AI.md

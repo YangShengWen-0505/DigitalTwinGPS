@@ -1,4 +1,4 @@
-from digital_twin import db
+from mock_gps import db
 
 
 def _plan():
@@ -44,15 +44,22 @@ def test_worker_lock_uses_epoch_and_allows_only_one_owner(tmp_path, monkeypatch)
     assert db.acquire_worker("two", future)
 
 
-def test_running_mission_becomes_interrupted_after_owner_restart(tmp_path, monkeypatch):
+def test_active_missions_become_interrupted_on_container_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.sqlite3")
     db.init_db()
-    mission_id = db.create_mission(
+    running_id = db.create_mission(
         {"init_loc": "25,121", "stops": [{"name": "A"}]}, _plan()
     )
     db.claim_next("test-worker")
-    db.init_db(interrupt_running=True)
-    assert db.get_mission(mission_id)["status"] == "interrupted"
+    planning_id = db.create_mission(
+        {"init_loc": "25,121", "stops": [{"name": "B", "mode": "walking"}]}
+    )
+    assert db.interrupt_active_missions() == 2
+    for mission_id in (running_id, planning_id):
+        mission = db.get_mission(mission_id)
+        assert mission["status"] == "interrupted"
+        assert mission["cancel_requested"] is True
+        assert mission["finished_at"] is not None
 
 
 def test_cancel_query_does_not_decode_plan(tmp_path, monkeypatch):
@@ -65,6 +72,70 @@ def test_cancel_query_does_not_decode_plan(tmp_path, monkeypatch):
     metadata = db.get_mission(mission_id, include_plan=False, include_payload=False)
     assert "plan" not in metadata
     assert "payload" not in metadata
+
+
+def test_cancel_before_claim_finalizes_mission(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.sqlite3")
+    db.init_db()
+    mission_id = db.create_mission({"init_loc": "25,121", "stops": [{"name": "A"}]})
+
+    assert db.request_cancel() == mission_id
+    assert db.claim_next("test-worker") is None
+
+    mission = db.get_mission(mission_id)
+    assert mission["status"] == "aborted"
+    assert mission["finished_at"] is not None
+
+
+def test_cancel_after_claim_leaves_finalization_to_the_worker(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.sqlite3")
+    db.init_db()
+    mission_id = db.create_mission({"init_loc": "25,121", "stops": [{"name": "A"}]})
+    db.claim_next("test-worker")
+
+    assert db.request_cancel() == mission_id
+    mission = db.get_mission(mission_id)
+    assert mission["status"] == "planning"
+    assert mission["cancel_requested"] is True
+    assert mission["finished_at"] is None
+
+
+def test_superseded_unclaimed_mission_is_finalized(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.sqlite3")
+    db.init_db()
+    first = db.create_mission({"init_loc": "25,121", "stops": [{"name": "A"}]})
+    second = db.create_mission({"init_loc": "25,121", "stops": [{"name": "B"}]})
+
+    assert db.get_mission(first)["status"] == "aborted"
+    assert db.get_mission(first)["finished_at"] is not None
+    assert db.claim_next("test-worker")["id"] == second
+
+
+def test_orphaned_running_mission_is_reclaimed_on_worker_startup(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.sqlite3")
+    db.init_db()
+    mission_id = db.create_mission({"init_loc": "25,121", "stops": [{"name": "A"}]}, _plan())
+    db.claim_next("dead-worker")
+    assert db.get_mission(mission_id)["status"] == "running"
+
+    # Mirrors run_worker(): the reclaim happens once the lease has been taken.
+    assert db.acquire_worker("new-worker", db.utc_epoch_ms() + 30_000)
+    assert db.interrupt_active_missions("Worker restarted") == 1
+
+    mission = db.get_mission(mission_id)
+    assert mission["status"] == "interrupted"
+    assert mission["finished_at"] is not None
+    assert mission["worker_id"] is None
+
+
+def test_finished_missions_survive_worker_startup_reclaim(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.sqlite3")
+    db.init_db()
+    done = db.create_mission({"init_loc": "25,121", "stops": [{"name": "A"}]}, _plan())
+    db.update_mission(done, status="completed", cancel_requested=0, is_holding_final_position=0)
+
+    assert db.interrupt_active_missions("Worker restarted") == 0
+    assert db.get_mission(done)["status"] == "completed"
 
 
 def test_new_mission_only_cancels_active_completed_holder(tmp_path, monkeypatch):

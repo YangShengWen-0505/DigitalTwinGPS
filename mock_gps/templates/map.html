@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ 'Mock GPS Follow Live Nav History · ' ~ page_context.id if page_context.mode == 'history' else 'Mock GPS Follow Live Nav Dashboard' }}</title>
+    <meta name="description" content="Operational dashboard for route simulation, movement logs, and GPS playback.">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/css/all.min.css') }}">
+    {# Order matters: responsive.css must stay last so its breakpoints win. #}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/shell.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/panels.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/modals.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/responsive.css') }}">
+</head>
+<body>
+    <div id="map"></div>
+
+    <div id="dashboard-shell">
+        <header id="command-bar" class="surface">
+            <div class="brand-block">
+                <div class="brand-icon"><i class="fa-solid fa-satellite-dish"></i></div>
+                <div>
+                    <div class="brand-title">Mock GPS Follow Live Nav</div>
+                    <div class="brand-subtitle">{{ 'History · ' ~ page_context.id if page_context.mode == 'history' else 'Route telemetry console' }}</div>
+                </div>
+                {% if page_context.mode == 'history' %}<span class="history-context-badge">HISTORY</span>{% endif %}
+            </div>
+
+            <button class="command-menu-btn" id="commandMenuBtn" type="button" title="Toggle actions">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+
+            <nav id="top-nav" class="command-group">
+                <button class="nav-btn" data-open-log="all"><i class="fa-solid fa-align-left"></i><span>System</span></button>
+                <button class="nav-btn" data-open-log="route"><i class="fa-solid fa-route"></i><span>Route</span></button>
+                <button class="nav-btn" data-open-log="error"><i class="fa-solid fa-triangle-exclamation"></i><span>Errors</span></button>
+                <button class="nav-btn" data-open-log="security"><i class="fa-solid fa-lock"></i><span>Security</span></button>
+                <button class="nav-btn" data-open-csv><i class="fa-solid fa-file-csv"></i><span>CSV</span></button>
+                <button class="nav-btn" id="navigationHistoryBtn"><i class="fa-solid fa-signs-post"></i><span>Navigation</span></button>
+                <button class="nav-btn primary" id="scheduleBtn"><i class="fa-solid fa-clipboard-list"></i><span>{{ 'LIVE Schedule' if page_context.mode == 'history' else 'Schedule' }}</span></button>
+                <button class="nav-btn primary" id="historyBtn"><i class="fa-solid fa-clock-rotate-left"></i><span>History</span></button>
+                <form class="logout-form" action="/logout" method="post">
+                    <button class="nav-btn" type="submit"><i class="fa-solid fa-right-from-bracket"></i><span>Logout</span></button>
+                </form>
+            </nav>
+        </header>
+
+        <button class="status-toggle surface" id="statusPanelBtn" title="Toggle status panel">
+            <i class="fa-solid fa-gauge-high"></i>
+        </button>
+
+        <main id="left-container" class="left-rail">
+            <section id="live-panel" class="surface panel">
+                <div class="panel-head">
+                    <div>
+                        <div class="eyebrow" id="status-title-text">Current status</div>
+                        <div id="action" class="action-text">Waiting...</div>
+                    </div>
+                    <div class="live-dot"></div>
+                </div>
+
+                <div class="coords">
+                    <i class="fa-solid fa-location-crosshairs"></i>
+                    <span id="lat">--</span>, <span id="lng">--</span>
+                </div>
+
+                <div class="toggle-list">
+                    <label class="toggle-wrap">
+                        <span><i class="fa-solid fa-video"></i> Auto camera</span>
+                        <input type="checkbox" id="autoFollow" checked>
+                        <div class="toggle-switch"></div>
+                    </label>
+                    <label class="toggle-wrap">
+                        <span><i class="fa-solid fa-location-dot"></i> Show points</span>
+                        <input type="checkbox" id="showPoints">
+                        <div class="toggle-switch"></div>
+                    </label>
+                    <label class="toggle-wrap">
+                        <span><i class="fa-solid fa-route"></i> Show route</span>
+                        <input type="checkbox" id="showPlannedRoute" checked>
+                        <div class="toggle-switch"></div>
+                    </label>
+                </div>
+            </section>
+
+            <section id="sys-monitor" class="surface panel">
+                <div class="panel-title-row">
+                    <div class="section-title"><i class="fa-solid fa-route"></i> Mission monitor</div>
+                    <span class="status-pill" id="mission-status">IDLE</span>
+                </div>
+
+                <div class="metric-grid">
+                    <div class="metric"><span>Elapsed</span><strong id="elapsed-time">--:--</strong></div>
+                    <div class="metric"><span>Progress</span><strong id="mission-progress">-/-</strong></div>
+                    <div class="metric"><span>Status</span><strong id="mission-state-text">IDLE</strong></div>
+                    <div class="metric"><span>P2P</span><strong id="p2p-state-text">Standby</strong></div>
+                </div>
+
+                <div class="info-row">
+                    <span>Target</span>
+                    <strong id="mission-target">Idle</strong>
+                </div>
+                <div class="url-box" id="tunnel-url">Tailscale standby</div>
+
+                <div class="meta-grid">
+                    <div class="meta-box"><div class="meta-label">Initial ETA</div><div class="meta-value" id="initial-eta">--</div></div>
+                    <div class="meta-box"><div class="meta-label">Latest ETA</div><div class="meta-value" id="latest-eta">--</div></div>
+                    <div class="meta-box"><div class="meta-label">Route Points</div><div class="meta-value" id="route-points">0</div></div>
+                    <div class="meta-box"><div class="meta-label">Schedule Debt</div><div class="meta-value" id="schedule-debt">0s</div></div>
+                </div>
+                <div class="url-box" id="mission-error" hidden></div>
+                <div class="url-box muted" id="log-session">No active log session</div>
+            </section>
+        </main>
+
+        <button class="sidebar-toggle surface" id="sidebarBtn" title="Toggle tools panel">
+            <i class="fa-solid fa-sliders"></i>
+        </button>
+
+        <aside id="right-sidebar" class="right-rail surface">
+            <div class="sidebar-content">
+                <section class="panel-block">
+                    <div class="section-title"><i class="fa-solid fa-chart-pie"></i> Statistics</div>
+                    <div class="stat-grid">
+                        <div class="stat-box"><div class="status-title">Points</div><div class="stat-val" id="totalPoints">0</div></div>
+                        <div class="stat-box"><div class="status-title">Distance</div><div class="stat-val" id="totalDistance">0.00<span class="stat-unit">km</span></div></div>
+                        <div class="stat-box"><div class="status-title">Last Fix</div><div class="stat-val" id="lastFix">--:--</div></div>
+                        <div class="stat-box"><div class="status-title">Mode</div><div class="stat-val" id="liveMode">LIVE</div></div>
+                    </div>
+                </section>
+
+                <section class="panel-block">
+                    <div class="section-title"><i class="fa-solid fa-layer-group"></i> Basemap</div>
+                    <select id="mapLayerSelect">
+                        <option value="cartoDark" selected>CartoDB Dark</option>
+                        <option value="osmDark">OSM Standard</option>
+                    </select>
+                </section>
+
+                <section class="panel-block">
+                    <div class="section-title"><i class="fa-solid fa-filter"></i> Type filter</div>
+                    <select id="typeFilter">
+                        <option value="ALL">All modes</option>
+                        <option value="walk">Walk</option>
+                        <option value="bus">Bus</option>
+                        <option value="mrt">MRT</option>
+                        <option value="wait">Wait</option>
+                    </select>
+                </section>
+
+                <section class="panel-block">
+                    <div class="section-title"><i class="fa-solid fa-palette"></i> Legend</div>
+                    <div id="legend" class="legend-grid"></div>
+                </section>
+
+                <button id="clearTracks" class="action-btn danger"><i class="fa-solid fa-eraser"></i> Clear traces</button>
+            </div>
+        </aside>
+
+        <section id="playback-panel" class="surface playback-dock">
+            <button id="playPauseBtn" class="play-btn"><i class="fa-solid fa-play"></i></button>
+            <div class="slider-container">
+                <span id="playback-time" class="time-display">--:--:--</span>
+                <input type="range" id="timeSlider" min="0" max="0" value="0" step="1">
+                <span id="playback-end-time" class="time-display">--:--:--</span>
+            </div>
+            <button id="liveBtn" class="live-btn active">LIVE</button>
+        </section>
+    </div>
+
+    <div id="mission-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Mission schedule</h2>
+                <button class="close-btn" data-close-modal="mission-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" id="mission-body"></div>
+        </div>
+    </div>
+
+    <div id="history-modal" class="modal">
+        <div class="modal-content wide">
+            <div class="modal-header">
+                <h2>Mission history</h2>
+                <button class="close-btn" data-close-modal="history-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" id="history-body"></div>
+        </div>
+    </div>
+
+    <div id="navigation-modal" class="modal">
+        <div class="modal-content wide">
+            <div class="modal-header">
+                <h2>Navigation history</h2>
+                <button class="close-btn" data-close-modal="navigation-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" id="navigation-body"></div>
+        </div>
+    </div>
+
+    <div id="data-modal" class="modal">
+        <div class="modal-content wide">
+            <div class="modal-header">
+                <h2 id="data-modal-title">Data</h2>
+                <button class="close-btn" data-close-modal="data-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" id="data-body"></div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/leaflet-polylinedecorator/leaflet.polylineDecorator.js') }}"></script>
+    <script id="page-context" type="application/json">{{ page_context|tojson }}</script>
+    <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
