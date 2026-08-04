@@ -1,0 +1,17 @@
+[project]
+name = "mock-gps-follow-live-nav"
+version = "2.0.0"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+# `ruff check .` must not walk runtime output or the local virtualenv.
+exclude = [".venv", "venv", "data", "logs", "graphify-out"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
