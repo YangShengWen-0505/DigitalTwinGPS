@@ -318,7 +318,7 @@ POST /start_task
 | `stops[].transit_type` | 否 | `AUTO`、`MRT`、`BUS` 或空字串，只有 `transit` 使用 |
 | `stops[].wait_time` | 否 | `HH:MM` 本地時刻，抵達該站後等到這個時間才出發 |
 | `stops[].skip_if_late` | 否 | 抵達時已過 `wait_time` 時，`true` 立即出發，`false` 等到隔天同一時刻 |
-| `stops[].coord` | 否 | 最終精準對位座標，格式為 `lat,lng` |
+| `stops[].coord` | 否 | 最終精準對位座標，格式為 `lat,lng`；先以地點名稱導航，再以 1.4 m/s 直線步行到此座標 |
 
 ### 停止任務
 
