@@ -1,3 +1,4 @@
+import math
 import re
 from datetime import datetime, timedelta, timezone
 from html import unescape
@@ -8,6 +9,7 @@ import polyline
 from mock_gps import config
 
 _HTML_TAG = re.compile(r"<[^>]+>")
+PRECISION_WALK_SPEED_MPS = 1.4
 
 
 def _instruction_text(value: str) -> str:
@@ -52,6 +54,46 @@ def _utc_iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="milliseconds")
 
 
+def _distance_meters(start: list[float], end: list[float]) -> float:
+    radius = 6371000.0
+    lat1, lng1 = map(math.radians, start)
+    lat2, lng2 = map(math.radians, end)
+    delta_lat = lat2 - lat1
+    delta_lng = lng2 - lng1
+    value = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
+    )
+    return radius * 2 * math.atan2(math.sqrt(value), math.sqrt(1 - value))
+
+
+def _precision_alignment_step(steps: list[dict], leg: dict, coord: str) -> dict | None:
+    if not coord:
+        return None
+    target = [float(value.strip()) for value in coord.split(",", 1)]
+    route_points = [point for step in steps for point in step["points"]]
+    if route_points:
+        start = route_points[-1]
+    else:
+        end_location = leg.get("end_location", {})
+        if "lat" not in end_location or "lng" not in end_location:
+            raise RuntimeError("Google route has no endpoint for precise-coordinate alignment")
+        start = [float(end_location["lat"]), float(end_location["lng"])]
+    distance = _distance_meters(start, target)
+    duration = max(1, math.ceil(distance / PRECISION_WALK_SPEED_MPS))
+    return {
+        "index": len(steps),
+        "travel_mode": "WALKING",
+        "vehicle_type": "",
+        "line": "",
+        "duration_seconds": duration,
+        "distance_meters": round(distance),
+        "points": [start, target],
+        "instruction": "Walk directly to the precise coordinate",
+        "precision_alignment": True,
+    }
+
+
 def plan_mission(init_loc: str, stops: list[dict], *, start_time: datetime | None = None) -> dict[str, Any]:
     if not config.gmaps_client:
         raise RuntimeError("Google Maps client is not configured")
@@ -69,7 +111,8 @@ def plan_mission(init_loc: str, stops: list[dict], *, start_time: datetime | Non
         }
         if mode == "transit" and transit_type in {"MRT", "BUS"}:
             kwargs["transit_mode"] = ["subway" if transit_type == "MRT" else "bus"]
-        destination = stop.get("coord") or stop["name"]
+        destination = stop["name"]
+        precision_coord = stop.get("coord", "")
         options = config.gmaps_client.directions(origin, destination, **kwargs)
         if not options:
             raise RuntimeError(f"Google returned no route for stop {index + 1}: {stop['name']}")
@@ -78,7 +121,6 @@ def plan_mission(init_loc: str, stops: list[dict], *, start_time: datetime | Non
         duration = int(leg.get("duration", {}).get("value", 0))
         if duration <= 0:
             raise RuntimeError(f"Google returned an invalid duration for stop {index + 1}: {stop['name']}")
-        arrival = departure + timedelta(seconds=duration)
         steps = []
         for step_index, step in enumerate(leg.get("steps", [])):
             transit = step.get("transit_details", {}) or {}
@@ -94,21 +136,30 @@ def plan_mission(init_loc: str, stops: list[dict], *, start_time: datetime | Non
                 "points": [[lat, lng] for lat, lng in points],
                 "instruction": _instruction_text(step.get("html_instructions", "")),
             })
+        alignment = _precision_alignment_step(steps, leg, precision_coord)
+        if alignment:
+            steps.append(alignment)
+            duration += alignment["duration_seconds"]
+        distance_meters = int(leg.get("distance", {}).get("value", 0))
+        if alignment:
+            distance_meters += alignment["distance_meters"]
+        arrival = departure + timedelta(seconds=duration)
         routes.append({
             "origin": origin,
             "destination": destination,
+            "precision_coord": precision_coord,
             "mode": mode,
             "transit_type": transit_type,
             "departure_at": _utc_iso(departure),
             "arrival_at": _utc_iso(arrival),
-            "distance_meters": int(leg.get("distance", {}).get("value", 0)),
+            "distance_meters": distance_meters,
             "duration_seconds": duration,
             "start_address": leg.get("start_address", ""),
             "end_address": leg.get("end_address", ""),
             "steps": steps,
         })
         departure = scheduled_departure(arrival, stop)
-        origin = destination
+        origin = precision_coord or destination
     return {
         "planned_at": _utc_iso(start_time or config.local_now()),
         "initial_google_eta": routes[-1]["arrival_at"],

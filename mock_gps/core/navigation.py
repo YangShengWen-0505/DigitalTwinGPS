@@ -232,9 +232,15 @@ def move_step(ctx: MissionContext, step: dict, deadline: float) -> bool:
     duration = max(1.0, float(step.get("duration_seconds", 1)))
     nominal_speed = total / duration
     is_mrt = step.get("vehicle_type") == "SUBWAY"
-    action = f"Taking MRT {step.get('line') or ''}".strip() if is_mrt else (
-        "Walking" if step.get("travel_mode") == "WALKING" else "Taking Bus"
-    )
+    if step.get("precision_alignment"):
+        action = "Precision Alignment"
+        logger.log_route(
+            f"Walking {step.get('distance_meters', 0)}m directly to the precise coordinate."
+        )
+    else:
+        action = f"Taking MRT {step.get('line') or ''}".strip() if is_mrt else (
+            "Walking" if step.get("travel_mode") == "WALKING" else "Taking Bus"
+        )
     progress = 0.0
     previous = tuple(points[0])
     visited: set[str] = set()
